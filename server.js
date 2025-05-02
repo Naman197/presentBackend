@@ -6,7 +6,7 @@ const cors = require("cors");
 const connectDB=require("./config/db");
 const app = express();
 const PORT = 3000;
-
+const postureRoutes=require('./routes/postureRoutes');
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -22,6 +22,7 @@ app.post("/api/data", (req, res) => {
   res.json({ message: "Data received", data });
 });
 
+app.use('/api',postureRoutes);
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
