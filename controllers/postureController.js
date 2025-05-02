@@ -471,7 +471,7 @@ exports.analyzePosture = async (req, res) => {
   const scriptPath = path.join(__dirname, '..', 'python', 'posture_analysis.py');
 
   // Use system Python (no virtualenv in deployment)
-  const pythonPath = 'python'; // Use the system's default Python interpreter
+  const pythonPath = 'python3'; // Use the system's default Python interpreter
 
   console.log('\n===== DEBUG START =====');
   console.log('Uploaded file path:', filePath);
