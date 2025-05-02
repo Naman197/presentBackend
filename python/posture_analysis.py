@@ -324,10 +324,10 @@ def analyze_video(input_path, output_path=None):
         print("Not enough data collected for analysis. Check if pose detection is working properly.")
         return
     
-    generate_report(timestamps, confidence_scores, detailed_scores)
+    generate_report(timestamps, confidence_scores, detailed_scores,output_path)
     print("Analysis complete!")
 
-def generate_report(timestamps, confidence, detail_scores):
+def generate_report(timestamps, confidence, detail_scores, output_path):
     """Professional reporting with advanced analytics"""
     df = pd.DataFrame({
         'timestamp': timestamps,
@@ -393,7 +393,9 @@ def generate_report(timestamps, confidence, detail_scores):
     plt.savefig('advanced_analysis_report.png', dpi=300)
     plt.close()
     
-    df.to_csv('posture_analysis_data.csv', index=False)
+    # df.to_csv('posture_analysis_data.csv', index=False)
+    df.to_csv(output_path, index=False)
+
     print("Report generated: advanced_analysis_report.png")
     print("Raw data saved: posture_analysis_data.csv")
 
