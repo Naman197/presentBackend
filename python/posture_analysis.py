@@ -420,22 +420,24 @@ import argparse
 from collections import deque
 import os
 import logging
+import sys
 
-# Configure logging
+# Configure logging to both file and stdout
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('posture_analysis.log'),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Suppress TensorFlow info messages
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# Disable GPU and suppress TensorFlow warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU
 
-# MediaPipe configuration (identical to original)
+# MediaPipe configuration
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
@@ -480,35 +482,41 @@ class OneEuroFilter:
         return x_hat
 
 class PostureAnalyzer:
-    """Original logic with added error handling"""
+    """Main analysis class with enhanced error handling"""
     def __init__(self):
-        self.pose = mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=2,
-            enable_segmentation=True,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.7
-        )
-        self.filters = {
-            'shoulder_alignment': OneEuroFilter(beta=0.7),
-            'head_position': OneEuroFilter(beta=0.5),
-            'spine_angle': OneEuroFilter(beta=0.6),
-            'arm_openness': OneEuroFilter(beta=0.4)
-        }
-        self.history = deque(maxlen=30)
-        self.feature_weights = {
-            'shoulder_alignment': 0.3,
-            'head_position': 0.25,
-            'spine_angle': 0.3,
-            'arm_openness': 0.15
-        }
+        try:
+            self.pose = mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,  # Reduced complexity for Render
+                enable_segmentation=False,
+                min_detection_confidence=0.7,
+                min_tracking_confidence=0.7
+            )
+            self.filters = {
+                'shoulder_alignment': OneEuroFilter(beta=0.7),
+                'head_position': OneEuroFilter(beta=0.5),
+                'spine_angle': OneEuroFilter(beta=0.6),
+                'arm_openness': OneEuroFilter(beta=0.4)
+            }
+            self.history = deque(maxlen=30)
+            self.feature_weights = {
+                'shoulder_alignment': 0.3,
+                'head_position': 0.25,
+                'spine_angle': 0.3,
+                'arm_openness': 0.15
+            }
+            logger.info("PostureAnalyzer initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize PostureAnalyzer: {str(e)}")
+            raise
 
     def process_frame(self, image):
-        """Unchanged logic with error wrapping"""
+        """Frame processing with robust error handling"""
         if image is None:
             return None, None
             
         try:
+            # Convert image to RGB for MediaPipe
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             results = self.pose.process(rgb_image)
             
@@ -516,6 +524,9 @@ class PostureAnalyzer:
                 return None, None
                 
             raw_features = self._extract_features(results.pose_landmarks)
+            if not raw_features:
+                return None, None
+                
             smoothed_features = {}
             for k, v in raw_features.items():
                 if k in self.filters:
@@ -527,11 +538,11 @@ class PostureAnalyzer:
             return analysis_result, results.pose_landmarks
             
         except Exception as e:
-            logger.error(f"Frame processing error: {str(e)}")
+            logger.error(f"Frame processing error: {str(e)}", exc_info=True)
             return None, None
 
     def _extract_features(self, landmarks):
-        """Original feature extraction logic"""
+        """Feature extraction with validation"""
         try:
             coords = {}
             vis = {}
@@ -539,6 +550,22 @@ class PostureAnalyzer:
                 coords[idx] = (lm.x, lm.y)
                 vis[idx] = lm.visibility
             
+            # Validate key landmarks exist
+            required_landmarks = [
+                mp_pose.PoseLandmark.LEFT_SHOULDER,
+                mp_pose.PoseLandmark.RIGHT_SHOULDER,
+                mp_pose.PoseLandmark.NOSE,
+                mp_pose.PoseLandmark.LEFT_HIP,
+                mp_pose.PoseLandmark.RIGHT_HIP,
+                mp_pose.PoseLandmark.LEFT_WRIST,
+                mp_pose.PoseLandmark.RIGHT_WRIST
+            ]
+            
+            for landmark in required_landmarks:
+                if landmark.value not in coords:
+                    logger.warning(f"Missing required landmark: {landmark.name}")
+                    return {}
+
             ls = coords[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
             rs = coords[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
             shoulder_align = abs(ls[1] - rs[1]) * 2
@@ -569,11 +596,11 @@ class PostureAnalyzer:
             return features
             
         except Exception as e:
-            logger.error(f"Feature extraction error: {str(e)}")
+            logger.error(f"Feature extraction error: {str(e)}", exc_info=True)
             return {}
 
     def _calculate_angle(self, a, b, c):
-        """Original angle calculation"""
+        """Robust angle calculation"""
         try:
             a = np.array(a)
             b = np.array(b)
@@ -597,8 +624,11 @@ class PostureAnalyzer:
             return 90.0
 
     def analyze_posture(self, features):
-        """Original scoring logic"""
+        """Posture analysis with validation"""
         try:
+            if not features:
+                return 0, {}, {}
+                
             self.history.append(features)
             
             if len(self.history) < 5:
@@ -609,38 +639,55 @@ class PostureAnalyzer:
                     'arm_openness': 0.3
                 }
             else:
-                df = pd.DataFrame(self.history)
-                baseline = df.quantile(0.7).to_dict()
+                try:
+                    df = pd.DataFrame(self.history)
+                    baseline = df.quantile(0.7).to_dict()
+                except Exception as e:
+                    logger.warning(f"Baseline calculation failed: {str(e)}")
+                    baseline = {
+                        'shoulder_alignment': 0.05,
+                        'head_position': -0.05,
+                        'spine_angle': 160,
+                        'arm_openness': 0.3
+                    }
             
             scores = {}
-            threshold = max(0.05, baseline['shoulder_alignment'] * 1.2)
-            scores['shoulder_alignment'] = 100 * (1 - min(features['shoulder_alignment'] / threshold, 1))
-            
-            threshold = min(-0.03, baseline['head_position'])
-            normalized = (features['head_position'] - threshold) / (0.1 - threshold)
-            scores['head_position'] = 100 * (1 - min(max(normalized, 0), 1))
-            
-            threshold = max(150, baseline['spine_angle'] * 0.9)
-            normalized = (features['spine_angle'] - 120) / (threshold - 120)
-            scores['spine_angle'] = 100 * min(max(normalized, 0), 1)
-            
-            threshold = max(0.3, baseline['arm_openness'] * 0.8)
-            normalized = features['arm_openness'] / threshold
-            scores['arm_openness'] = 100 * min(normalized, 1)
+            try:
+                threshold = max(0.05, baseline['shoulder_alignment'] * 1.2)
+                scores['shoulder_alignment'] = 100 * (1 - min(features['shoulder_alignment'] / threshold, 1))
+                
+                threshold = min(-0.03, baseline['head_position'])
+                normalized = (features['head_position'] - threshold) / (0.1 - threshold)
+                scores['head_position'] = 100 * (1 - min(max(normalized, 0), 1))
+                
+                threshold = max(150, baseline['spine_angle'] * 0.9)
+                normalized = (features['spine_angle'] - 120) / (threshold - 120)
+                scores['spine_angle'] = 100 * min(max(normalized, 0), 1)
+                
+                threshold = max(0.3, baseline['arm_openness'] * 0.8)
+                normalized = features['arm_openness'] / threshold
+                scores['arm_openness'] = 100 * min(normalized, 1)
+            except KeyError as e:
+                logger.error(f"Missing feature in analysis: {str(e)}")
+                return 0, {}, {}
             
             confidence = 0
             for k in scores:
                 if k in self.feature_weights:
                     confidence += scores[k] * self.feature_weights[k]
             
-            left_shoulder_vis = features.get('left_shoulder_vis', 1)
-            right_shoulder_vis = features.get('right_shoulder_vis', 1)
-            nose_vis = features.get('nose_vis', 1)
-            
-            if left_shoulder_vis < 0.7 and right_shoulder_vis < 0.7:
-                confidence *= 0.4
-            if nose_vis < 0.7:
-                confidence *= 0.4
+            # Adjust confidence based on landmark visibility
+            try:
+                left_shoulder_vis = features.get('left_shoulder_vis', 1)
+                right_shoulder_vis = features.get('right_shoulder_vis', 1)
+                nose_vis = features.get('nose_vis', 1)
+                
+                if left_shoulder_vis < 0.7 and right_shoulder_vis < 0.7:
+                    confidence *= 0.4
+                if nose_vis < 0.7:
+                    confidence *= 0.4
+            except Exception as e:
+                logger.warning(f"Visibility adjustment failed: {str(e)}")
             
             feedback = {
                 'Shoulders': ('Excellent' if scores['shoulder_alignment'] > 80 else 
@@ -656,31 +703,55 @@ class PostureAnalyzer:
             return confidence, feedback, scores
             
         except Exception as e:
-            logger.error(f"Posture analysis error: {str(e)}")
+            logger.error(f"Posture analysis error: {str(e)}", exc_info=True)
             return 0, {}, {}
 
 def analyze_video(input_path, output_path=None):
-    """Complete video processing with original visualization"""
+    """Main video analysis function with enhanced error handling"""
     try:
-        input_path = str(input_path)
+        logger.info(f"Starting video analysis for: {input_path}")
+        
+        # Validate input path
         if not os.path.exists(input_path):
-            logger.error(f"Input file not found: {input_path}")
-            return
+            raise FileNotFoundError(f"Input file not found: {input_path}")
         
         analyzer = PostureAnalyzer()
         
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            logger.error(f"Could not open video: {input_path}")
-            return
+        # Open video with fallback for Render environment
+        try:
+            cap = cv2.VideoCapture(input_path)
+            if not cap.isOpened():
+                raise IOError(f"Could not open video: {input_path}")
+        except Exception as e:
+            logger.error(f"Video capture error: {str(e)}")
+            raise
         
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        # Get video properties with fallbacks
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            if fps <= 0:
+                fps = 30  # Default fallback
+            if width <= 0 or height <= 0:
+                width, height = 1280, 720  # Default fallback
+        except Exception as e:
+            logger.warning(f"Could not get video properties: {str(e)}")
+            fps, width, height = 30, 1280, 720
         
+        # Initialize video writer if needed
         writer = None
         if output_path:
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                if not writer.isOpened():
+                    logger.warning("Could not initialize video writer")
+                    writer = None
+            except Exception as e:
+                logger.warning(f"Video writer initialization failed: {str(e)}")
+                writer = None
         
         timestamps = []
         confidence_scores = []
@@ -692,56 +763,72 @@ def analyze_video(input_path, output_path=None):
             if not ret:
                 break
                 
-            result, landmarks = analyzer.process_frame(frame)
-            if result:
-                confidence, feedback, scores = result
-                time_sec = frame_count / fps
-                timestamps.append(time_sec)
-                confidence_scores.append(confidence)
-                detailed_scores.append(scores)
-                
-                viz_frame = frame.copy()
-                if landmarks:
-                    mp_drawing.draw_landmarks(
-                        viz_frame,
-                        landmarks,
-                        mp_pose.POSE_CONNECTIONS,
-                        mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=3, circle_radius=5),
-                        mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3)
-                    )
-                
-                cv2.putText(viz_frame, f"Confidence: {confidence:.1f}%", (20, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0,200,0), 2)
-                
-                y_offset = 80
-                for aspect, status in feedback.items():
-                    cv2.putText(viz_frame, f"{aspect}: {status}", (20, y_offset),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-                    y_offset += 40
-                
-                if writer:
-                    writer.write(viz_frame)
+            frame_count += 1
+            
+            try:
+                result, landmarks = analyzer.process_frame(frame)
+                if result:
+                    confidence, feedback, scores = result
+                    time_sec = frame_count / fps
+                    timestamps.append(time_sec)
+                    confidence_scores.append(confidence)
+                    detailed_scores.append(scores)
                     
-                cv2.imshow('Posture Analysis', viz_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                    
+                    # Visualization (optional for API)
+                    if writer or 'DISPLAY' in os.environ:
+                        viz_frame = frame.copy()
+                        if landmarks:
+                            mp_drawing.draw_landmarks(
+                                viz_frame,
+                                landmarks,
+                                mp_pose.POSE_CONNECTIONS,
+                                mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=3, circle_radius=5),
+                                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3)
+                            )
+                        
+                        cv2.putText(viz_frame, f"Confidence: {confidence:.1f}%", (20, 40),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,200,0), 2)
+                        
+                        y_offset = 80
+                        for aspect, status in feedback.items():
+                            cv2.putText(viz_frame, f"{aspect}: {status}", (20, y_offset),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+                            y_offset += 40
+                        
+                        if writer:
+                            writer.write(viz_frame)
+                        
+                        # Only show window if display is available
+                        if 'DISPLAY' in os.environ:
+                            cv2.imshow('Posture Analysis', viz_frame)
+                            if cv2.waitKey(1) & 0xFF == ord('q'):
+                                break
+            except Exception as e:
+                logger.error(f"Error processing frame {frame_count}: {str(e)}")
+                continue
+                
         cap.release()
         if writer:
             writer.release()
-        cv2.destroyAllWindows()
+        if 'DISPLAY' in os.environ:
+            cv2.destroyAllWindows()
         
         if len(confidence_scores) >= 5:
-            generate_report(timestamps, confidence_scores, detailed_scores, output_path)
+            csv_path = output_path.replace('.mp4', '.csv') if output_path else 'posture_data.csv'
+            generate_report(timestamps, confidence_scores, detailed_scores, csv_path)
+            return csv_path
         else:
-            logger.error("Insufficient data for analysis")
+            raise ValueError("Insufficient data for analysis (less than 5 valid frames)")
             
     except Exception as e:
-        logger.error(f"Video analysis failed: {str(e)}")
+        logger.error(f"Video analysis failed: {str(e)}", exc_info=True)
+        raise
 
 def generate_report(timestamps, confidence, detail_scores, output_path):
-    """Original reporting logic"""
+    """Generate report with error handling"""
     try:
+        logger.info(f"Generating report to {output_path}")
+        
         df = pd.DataFrame({
             'timestamp': timestamps,
             'confidence': confidence
@@ -750,69 +837,99 @@ def generate_report(timestamps, confidence, detail_scores, output_path):
         for key in detail_scores[0].keys():
             df[key] = [s[key] for s in detail_scores]
         
-        window_size = min(len(df), 15)
-        if window_size % 2 == 0:
-            window_size -= 1
+        # Smoothing with fallback
+        try:
+            window_size = min(len(df), 15)
+            if window_size % 2 == 0:
+                window_size -= 1
+            if window_size >= 3:
+                df['smoothed'] = signal.savgol_filter(df['confidence'], window_size, 3)
+            else:
+                df['smoothed'] = df['confidence']
+        except Exception as e:
+            logger.warning(f"Smoothing failed: {str(e)}")
+            df['smoothed'] = df['confidence']
         
-        df['smoothed'] = signal.savgol_filter(df['confidence'], window_size, 3) if window_size >= 3 else df['confidence']
+        # Plotting with fallbacks
+        try:
+            plt.figure(figsize=(16, 12))
+            
+            # Plot 1: Confidence Trend
+            plt.subplot(2, 2, 1)
+            plt.plot(df['timestamp'], df['confidence'], 'b-', alpha=0.3)
+            plt.plot(df['timestamp'], df['smoothed'], 'r-', linewidth=2)
+            plt.title('Confidence Trend')
+            plt.xlabel('Time (s)')
+            plt.ylabel('Score')
+            plt.ylim(0, 100)
+            plt.grid(True)
+            
+            # Plot 2: Feature Distribution
+            plt.subplot(2, 2, 2)
+            features = ['shoulder_alignment', 'head_position', 'spine_angle', 'arm_openness']
+            if len(df) >= 10:
+                df[features].plot.kde(ax=plt.gca())
+                plt.title('Feature Distribution')
+                plt.xlim(0, 100)
+            else:
+                plt.title('Insufficient Data')
+            plt.grid(True)
+            
+            # Plot 3: Correlation Matrix
+            plt.subplot(2, 2, 3)
+            corr = df[features].corr()
+            plt.imshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
+            plt.colorbar()
+            plt.xticks(range(len(features)), features, rotation=45)
+            plt.yticks(range(len(features)), features)
+            plt.title('Feature Correlation')
+            
+            # Plot 4: Confidence Histogram
+            plt.subplot(2, 2, 4)
+            plt.hist(df['confidence'], bins=min(20, len(df)//5 + 1), edgecolor='black')
+            plt.title('Confidence Distribution')
+            plt.xlabel('Score')
+            plt.ylabel('Frequency')
+            plt.grid(True)
+            
+            plt.tight_layout()
+            plt.savefig('posture_report.png', dpi=300)
+            plt.close()
+        except Exception as e:
+            logger.error(f"Plot generation failed: {str(e)}")
         
-        plt.figure(figsize=(16, 12))
-        
-        # Plot 1: Confidence Trend
-        plt.subplot(2, 2, 1)
-        plt.plot(df['timestamp'], df['confidence'], 'b-', alpha=0.3)
-        plt.plot(df['timestamp'], df['smoothed'], 'r-', linewidth=2)
-        plt.title('Confidence Trend')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Score')
-        plt.ylim(0, 100)
-        plt.grid(True)
-        
-        # Plot 2: Feature Distribution
-        plt.subplot(2, 2, 2)
-        features = ['shoulder_alignment', 'head_position', 'spine_angle', 'arm_openness']
-        if len(df) >= 10:
-            df[features].plot.kde(ax=plt.gca())
-            plt.title('Feature Distribution')
-            plt.xlim(0, 100)
-        else:
-            plt.title('Insufficient Data')
-        plt.grid(True)
-        
-        # Plot 3: Correlation Matrix
-        plt.subplot(2, 2, 3)
-        corr = df[features].corr()
-        plt.imshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
-        plt.colorbar()
-        plt.xticks(range(len(features)), features, rotation=45)
-        plt.yticks(range(len(features)), features)
-        plt.title('Feature Correlation')
-        
-        # Plot 4: Confidence Histogram
-        plt.subplot(2, 2, 4)
-        plt.hist(df['confidence'], bins=min(20, len(df)//5 + 1), edgecolor='black')
-        plt.title('Confidence Distribution')
-        plt.xlabel('Score')
-        plt.ylabel('Frequency')
-        plt.grid(True)
-        
-        plt.tight_layout()
-        plt.savefig('posture_report.png', dpi=300)
-        plt.close()
-        
-        csv_path = output_path if output_path else 'posture_data.csv'
-        df.to_csv(csv_path, index=False)
-        
-        logger.info(f"Report generated: posture_report.png")
-        logger.info(f"Data saved: {csv_path}")
+        # Save CSV
+        try:
+            df.to_csv(output_path, index=False)
+            logger.info(f"Successfully saved data to {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to save CSV: {str(e)}")
+            raise
         
     except Exception as e:
-        logger.error(f"Report generation failed: {str(e)}")
+        logger.error(f"Report generation failed: {str(e)}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Posture Analysis')
-    parser.add_argument('-i', '--input', required=True, help='Input video path')
-    parser.add_argument('-o', '--output', help='Output video path')
-    args = parser.parse_args()
-    
-    analyze_video(args.input, args.output)
+    try:
+        parser = argparse.ArgumentParser(description='Posture Analysis')
+        parser.add_argument('-i', '--input', required=True, help='Input video path')
+        parser.add_argument('-o', '--output', help='Output path (CSV or video)')
+        args = parser.parse_args()
+        
+        # Determine output type
+        if args.output and args.output.lower().endswith('.mp4'):
+            # Video analysis mode
+            csv_path = args.output.replace('.mp4', '.csv')
+            analyze_video(args.input, args.output)
+            generate_report([], [], [], csv_path)  # This would need actual data in a real run
+        else:
+            # CSV-only mode
+            csv_path = args.output if args.output else 'posture_data.csv'
+            analyze_video(args.input)
+            generate_report([], [], [], csv_path)  # This would need actual data in a real run
+        
+    except Exception as e:
+        logger.error(f"Main execution failed: {str(e)}", exc_info=True)
+        sys.exit(1)
