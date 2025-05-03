@@ -22,6 +22,8 @@ app.post("/api/data", (req, res) => {
   res.json({ message: "Data received", data });
 });
 
+app.use("/api/auth", authRoutes);
+
 app.use('/api',postureRoutes);
 // Start server
 app.listen(PORT, () => {

@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/User");
-const SECRET = "your_jwt_secret_key"; // Use env variable in production
+const User = require("../models/user");
+const SECRET = "1234"; // Use env variable in production
 
 exports.signup = async (req, res) => {
   try {
