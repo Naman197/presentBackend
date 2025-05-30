@@ -7,17 +7,17 @@
 ## 🚀 Project Repositories
 
 ### 🔹 [PresentBackend](https://github.com/Naman197/presentBackend)
-**Repository URL**: `https://github.com/Naman197/presentBackend`
+**Repository URL**: [https://github.com/Naman197/presentBackend](https://github.com/Naman197/presentBackend)
 
 This backend service handles event creation, user submissions, data extraction, and orchestration across the Prism system. It supports customization of evaluation based on organizational roles and culture.
 
 ### 🔹 [CSVDecoder](https://github.com/Naman197/csvdecoder)
-**Repository URL**: `https://github.com/Naman197/csvdecoder`
+**Repository URL**: [https://github.com/Naman197/csvdecoder](https://github.com/Naman197/csvdecoder)
 
 This module is responsible for parsing and decoding CSV files related to extracted data and evaluation metrics. It ensures structured handling of skeletal and audio features for downstream analysis.
 
 ### 🔹 [FactChecker](https://github.com/Naman197/factchecker)
-**Repository URL**: `https://github.com/Naman197/factchecker`
+**Repository URL**: [https://github.com/Naman197/factchecker](https://github.com/Naman197/factchecker)
 
 Uses LLMs to analyze the factual accuracy and relevance of spoken or presented content. This ensures content validation as part of the overall confidence score.
 
@@ -39,8 +39,9 @@ Uses LLMs to analyze the factual accuracy and relevance of spoken or presented c
 - **Frontend**: React.js, Tailwind CSS *(if any, based on future expansion)*
 - **Backend**: Node.js, Express.js
 - **AI/ML Models**: Gemini Flash2.5, LLaMA (for NLP), OpenCV, MediaPipe, Librosa (for AV processing)
+- **Programming Languages**: Python (for ML/AI processing), JavaScript/Node.js (for backend services)
 - **Database**: MongoDB
-- **DevOps**: Docker, GitHub Actions *(assumed pipeline management)*
+- **DevOps**: GitHub Actions *(for CI/CD pipeline management)*
 
 ---
 
